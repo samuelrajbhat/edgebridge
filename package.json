@@ -1,0 +1,13 @@
+{
+  "name": "monitor-portals",
+  "version": "0.0.3",
+  "private": true,
+  "description": "A GNOME Shell monitor geometry inspector and foundation for cursor portals",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node tests/run.js",
+    "check": "make check",
+    "demo": "gjs -m tools/demo.js"
+  }
+}

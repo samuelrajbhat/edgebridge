@@ -1,0 +1,8 @@
+{
+  "uuid": "monitor-portals@monitormap.local",
+  "name": "Monitor Portals",
+  "description": "Connect all four edges of a monitor to another display, with optional return portals and blocked-edge rescue.",
+  "shell-version": ["50"],
+  "version": 3,
+  "version-name": "0.0.3"
+}

@@ -1,0 +1,596 @@
+Project Plan: Monitor Portals
+A configurable virtual monitor navigation system for Linux • Technical design, roadmap, milestones, and testing plan
+GNOME 50.1
+Wayland
+JavaScript / GJS
+Open-source project
+
+1. Project overview
+Monitor Portals is a desktop utility that removes inaccessible mouse-cursor boundaries between monitors with different dimensions, resolutions, scaling factors, or arrangements.
+
+Instead of changing monitor resolutions or physically rearranging displays, the application creates configurable virtual connections between monitor edges.
+Primary problem
+Your current arrangement has a curved ultrawide external monitor (Monitor 2) above a smaller laptop display (Monitor 1).
+
+The mouse can cross between them only where their rectangular display boundaries overlap. The remaining portions of the ultrawide monitor's bottom edge are blocked.
+Project goals
+1. Edge equalization: Make the full facing edges of differently sized monitors navigable.
+2. Surround mode: Allow one monitor to be virtually accessible through all four edges of another.
+3. Custom navigation: Let users define connections between specific monitor edges.
+4. Automatic configuration: Detect monitor connection, disconnection, arrangement, resolution, and scaling changes.
+5. Graphical configuration: Provide a simple interface for selecting monitors, modes, and navigation behavior.
+Scope and technical decisions
+Item	Decision
+Initial platform	Ubuntu, GNOME 50.1, Wayland
+Product type	GNOME Shell extension
+Main language	JavaScript using GJS
+Settings UI	GTK4 and Libadwaita
+Settings storage	GSettings
+Initial hardware	Your ultrawide monitor + laptop
+Future compatibility	Other GNOME versions and 3+ monitors
+Project delivery	Independently installable open-source extension
+
+GNOME Shell extensions can operate within the compositor, unlike ordinary Wayland applications, which generally cannot reposition the system pointer. The existing Cursor Wrap project demonstrates pointer tracking and relocation on GNOME 50, making this a realistic technical approach. 
+GNOME JavaScript+1
+
+2. Development roadmap
+I recommend a 10-week roadmap, assuming you are developing this individually alongside other responsibilities. This is a planning schedule rather than a fixed development deadline.
+01
+
+Research and environment
+
+Week 1
+
+Verify GNOME APIs and initialize the project
+
+
+02
+
+Monitor geometry engine
+
+Week 2
+
+Detect monitors and calculate boundaries
+
+
+03
+
+Cursor navigation prototype
+
+Week 3
+
+Detect blocked-edge movement and relocate the cursor
+
+
+04
+
+Edge Equalizer MVP
+
+Weeks 4–5
+
+Implement usable bidirectional transfers
+
+
+05
+
+Surround and custom modes
+
+Weeks 6–7
+
+Generalize the navigation algorithm
+
+
+06
+
+Settings and configuration
+
+Week 8
+
+Create graphical preferences and save settings
+
+
+07
+
+Testing and optimization
+
+Week 9
+
+Handle scaling, dragging, pointer barriers, and layout changes
+
+
+08
+
+Release
+
+Week 10
+
+Package, document, and publish
+
+
+
+The key milestone is at the end of Week 5: a functioning tool that solves your original ultrawide-to-laptop cursor problem. All subsequent functionality builds on that foundation.
+3. Detailed system architecture
+The tool should be divided into independent modules so that adding new cursor-navigation modes doesn't require rewriting the entire application.
+GNOME Shell / Mutter
+
+Monitor geometry, pointer events, input state
+
+Monitor Manager
+
+Detects monitor sizes, positions, scaling, and layout changes
+
+
+Cursor Tracker
+
+Observes pointer coordinates and motion events
+
+
+
+Navigation Engine
+
+Detect blocked edges → Select route → Calculate destination → Apply safety rules
+
+Pointer Transport
+
+Moves the pointer through valid compositor geometry
+
+
+Preferences UI
+
+GSettings
+
+
+Configuration feeds the navigation engine; the extension executes pointer transitions inside GNOME Shell.
+Module responsibilities
+Module	Core responsibilities
+Monitor Manager	Discover monitors, track logical geometry, identify blocked boundaries
+Cursor Tracker	Receive pointer motion, determine monitor and relevant edge
+Edge Detector	Determine whether a crossing is valid, blocked, or mapped
+Navigation Engine	Resolve source-to-destination routes and navigation modes
+Coordinate Mapper	Map positions using proportional, absolute, or custom mappings
+Pointer Transport	Execute pointer movement while respecting barriers
+Safety Controller	Prevent loops, accidental transitions, and drag interference
+Preferences Manager	Load, validate, and save user configurations
+
+The GNOME APIs to investigate first are:
+- Main.layoutManager.monitors for logical monitor geometry.
+- Main.layoutManager's monitors-changed signal for updates.
+- global.backend.get_cursor_tracker() and position-invalidated for cursor tracking.
+- Clutter.Seat.warp_pointer() for pointer relocation.
+- Meta.LaterType.BEFORE_REDRAW for coalescing rapid motion events.
+These APIs and patterns appear in the existing GNOME-compatible Cursor Wrap implementation. 
+GitHub+1
+
+4. Core algorithm design
+This is the central technical part of the project.
+A. Represent monitor geometry
+Store each monitor's geometry using logical desktop coordinates.
+const monitors = [
+  {
+    id: "external",
+    x: 0,
+    y: 0,
+    width: 3440,
+    height: 1440
+  },
+  {
+    id: "laptop",
+    x: 760,
+    y: 1440,
+    width: 1920,
+    height: 1080
+  }
+];
+
+
+These are example values. The actual values will be read from your GNOME configuration.
+
+Use half-open rectangles:
+\[
+[x,x+W)\times[y,y+H)
+\]
+
+This avoids ambiguity about ownership of the last pixel.
+B. Detect inaccessible boundaries
+For your two-monitor case, calculate the horizontal overlap between the bottom of Monitor 2 and the top of Monitor 1.
+\[
+L=\max(x_1,x_2)
+\]
+
+\[
+R=\min(x_1+W_1,x_2+W_2)
+\]
+
+If \(L < R\), the overlap is the interval \([L,R)\).
+
+For the example layout, the ultrawide monitor has:
+- Left blocked interval: \(0\)–\(760\)
+- Normal crossing interval: \(760\)–\(2680\)
+- Right blocked interval: \(2680\)–\(3440\)
+The first prototype should detect these regions automatically.
+C. Calculate the destination coordinates
+For an edge mapped proportionally onto another edge, normalize the pointer's position.
+\[
+t=\operatorname{clamp}\left(\frac{x_s-x_{s,\min}}{W_s-1},0,1\right)
+\]
+
+Then map to the destination:
+\[
+x_d=x_{d,\min}+t(W_d-1)
+\]
+
+Finally, move the pointer a few logical pixels inside the destination to prevent repeated triggering.
+
+The same algorithm works for vertical edges by replacing horizontal coordinates and widths with vertical coordinates and heights.
+D. Define two different equalization policies
+This is an important product decision.
+
+Blocked-edge rescue — default MVP
+
+Preserve normal cursor movement through existing shared boundaries. Redirect only attempts to cross blocked sections.
+
+This is less disruptive and easier to implement reliably.
+
+
+
+Full-edge proportional mapping — advanced
+
+Apply proportional mapping to the entire designated edge, including areas that would normally cross directly.
+
+This requires intercepting or controlling native crossings before the cursor enters the other display. Treat this as a separate technical investigation, not a guaranteed MVP feature.
+
+
+
+E. Cursor transition algorithm
+The initial engine can follow this logic:
+ON POINTER MOTION:
+
+  Read current pointer position and button state
+
+  If feature is disabled:
+      EXIT
+
+  If a mouse button is held:
+      EXIT
+
+  Find the current monitor
+
+  Determine whether pointer reached
+  a configured exit boundary
+
+  If no exit boundary:
+      Reset transition state
+      EXIT
+
+  If the cursor is already transitioning:
+      EXIT
+
+  Find the destination monitor and entry edge
+
+  If no valid route exists:
+      EXIT
+
+  Calculate destination position
+
+  Apply inset and coordinate clamping
+
+  Execute safe pointer relocation
+
+  Verify the destination when possible
+
+  Disarm transition until cursor moves
+  away from the destination edge
+
+
+Important: A pointer at an edge does not always mean the user intends to cross it. Later versions should distinguish outward movement from simply touching or sliding along the boundary. This may involve direction tracking, pointer-barrier events, or an optional short edge delay.
+F. Configuration model
+Each monitor connection should be represented as a directed rule.
+
+For example:
+{
+  "schemaVersion": 1,
+  "mode": "edge-equalizer",
+  "routes": [
+    {
+      "source": {
+        "monitor": "external",
+        "edge": "bottom"
+      },
+      "destination": {
+        "monitor": "laptop",
+        "edge": "top"
+      },
+      "activation": "blocked-only",
+      "mapping": "proportional",
+      "enabled": true
+    }
+  ],
+  "safety": {
+    "disableDuringDrag": true,
+    "landingInset": 3,
+    "cooldownMs": 120
+  }
+}
+
+
+Here, external and laptop are internal identifiers, not actual hardware connector names. The cooldown and inset values are initial design parameters to test, not confirmed optimal settings.
+
+Representing mappings as directed rules also allows asymmetric behavior. For example, Monitor 2's bottom edge can use proportional mapping while Monitor 1's top edge uses a normal crossing.
+
+5. Development phases and checkpoints
+Each phase below has a concrete deliverable and a pass/fail criterion. Do not advance merely because the code runs without errors.
+1Phase 1 — Research and project setupWeek 1 · Hello-world GNOME Shell extensionImplementation tasks
+[ ] Create a Git repository and GNOME extension skeleton
+[ ] Verify monitor, pointer-tracking, and warp APIs on GNOME 50.1
+[ ] Build a development and debugging workflow
+[ ] Study Cursor Wrap's tracking, safety, and pointer transport
+
+
+Checkpoint — all must pass
+[ ] Extension enables and disables cleanly
+[ ] GNOME Shell logs show no extension errors
+[ ] A safe test environment is available
+
+Deliverable
+
+Hello-world GNOME Shell extension
+
+
+2Phase 2 — Monitor geometryWeek 2 · Monitor geometry and edge-analysis module3Phase 3 — Cursor tracking and relocationWeek 3 · One working custom cursor portal4Phase 4 — Bidirectional Edge EqualizerWeeks 4–5 · v0.1 — usable Edge Equalizer MVP5Phase 5 — Surround and custom mappingWeeks 6–7 · v0.2 — configurable navigation engine6Phase 6 — Graphical preferencesWeek 8 · v0.3 — user-configurable utility7Phase 7 — Reliability and performanceWeek 9 · Release candidate8Phase 8 — Packaging and publicationWeek 10 · v1.0 — public release
+Expand each phase to see its technical tasks and acceptance checks. The checkboxes are an interactive planning aid within this response.6. Recommended repository structure
+A modular structure will make it easier to test the coordinate logic separately from GNOME.
+monitor-portals/
+│
+├── metadata.json
+├── extension.js
+├── prefs.js
+│
+├── core/
+│   ├── monitorManager.js
+│   ├── edgeDetector.js
+│   ├── cursorTracker.js
+│   ├── navigationEngine.js
+│   ├── coordinateMapper.js
+│   ├── pointerTransport.js
+│   ├── safetyController.js
+│   └── routeValidator.js
+│
+├── schemas/
+│   └── org.gnome.shell.extensions.
+│       monitor-portals.gschema.xml
+│
+├── tests/
+│   ├── geometry.test.js
+│   ├── mapping.test.js
+│   ├── navigation.test.js
+│   └── integration/
+│
+├── docs/
+│   ├── architecture.md
+│   ├── installation.md
+│   └── troubleshooting.md
+│
+├── Makefile
+├── package.json
+├── README.md
+├── LICENSE
+└── .gitignore
+
+
+The algorithm modules should contain as little GNOME-specific code as possible. For example, coordinateMapper.js should accept numbers and return numbers. That lets you test it using Node.js without launching GNOME.
+
+extension.js should mainly initialize modules, connect signals, update state, and clean up when disabled.
+7. Technical challenges and solutions
+These deserve particular attention because they can determine whether the project works reliably.
+Challenge	Proposed approach	Priority
+Blocked cursor edges	Detect per-monitor boundaries rather than only global desktop edges	Critical
+Pointer barriers	Route pointer movement through known valid monitor seams when necessary	Critical
+Accidental jumping	Activation rules, small destination inset, disarm/rearm logic	Critical
+Dragging windows	Suppress transitions while a mouse button is held	Critical
+Overlapping native crossings	Preserve native movement in the MVP; investigate interception for full equalization	High
+Different resolutions/scales	Use logical coordinates; normalize edge position	High
+Monitor unplugged	Invalidate routes, refresh geometry, suspend affected mappings	High
+Several destination monitors	Directed route graph with explicit priority and ambiguity handling	Medium
+Pointer-confined applications	Respect compositor confinement, fail without repeated retries	High
+Performance overhead	Event-driven checks with at most one processing pass per frame	High
+
+One particularly important discovery: Mutter applies pointer barriers even to pointer warps. Cursor Wrap handles GNOME Shell barriers by moving across monitor seams in steps rather than always teleporting directly from source to destination. Its implementation provides a valuable technical reference for your pointer transport module. 
+GitHub
+
+
+It also demonstrates a safe approach that checks pointer motion at most once per frame and avoids continuous Wayland polling. 
+GitHub
+
+
+The extension must handle failures safely. For example, if the compositor refuses a warp during a game, the navigation engine should avoid repeatedly attempting the same transition.
+
+8. Testing strategy
+You should have two complementary test systems.
+
+Unit tests: Verify geometry calculations, coordinate mapping, and route selection using synthetic monitor arrangements.
+
+GNOME integration tests: Run the extension with real Mutter input handling, ideally in a nested or headless GNOME session, then verify that the resulting cursor coordinates match expectations.
+
+The Cursor Wrap project already includes headless integration tests using virtual monitors and a virtual mouse. This is an excellent model for your future automated testing system. 
+GitHub
+
+Core test matrix
+Test	Scenario	Expected result
+T01	Two equal-sized monitors	Normal navigation works
+T02	Ultrawide above laptop	Both blocked bottom-edge regions transfer
+T03	Different horizontal offsets	Correct source and target boundaries
+T04	Vertical side-by-side monitors	Correct mapping along vertical edges
+T05	100%, 125%, and 200% scaling	Correct logical coordinate mapping
+T06	Mouse button held	No unwanted transition
+T07	Cursor at destination edge	No immediate return loop
+T08	Monitor disconnected	Invalid routes safely disabled
+T09	Three monitors connected	Correct destination chosen
+T10	GNOME hot corners and panel	No persistent blocked warp
+T11	Pointer-confined game	Confinement respected
+T12	Repeated enable/disable	No leaked event handlers
+
+Proposed release quality targets
+Blocked-edge coverage
+100%
+Of supported, configured edge regions
+Mapping unit tests
+100%
+Must pass before release
+Transition response
+≤ 2 frames
+Initial responsiveness target, to be measured
+Accidental transitions
+0
+Target during controlled regression tests
+
+
+These are proposed success criteria, not measured performance claims.
+9. User interface roadmap
+For the first version, keep the UI simple: a list of monitors, a mode selector, and an enable/disable switch.
+
+Later, create a visual editor where users can select a monitor edge, choose its destination, and configure how the cursor enters.
+Monitor Portals
+
+UI prototype
+
+
+[x] Enable virtual monitor navigation
+Navigation mode
+Edge Equalizer
+
+Surround Mode
+
+Custom Mapping
+
+
+Position mapping
+Proportional position
+
+Preserve absolute coordinate where possible
+
+Enter at destination center
+
+
+Current configuration preview
+
+Mode: Edge Equalizer · Mapping: proportional
+
+This is a UI design example. It does not change the monitor settings on your computer.
+For the eventual application, I would also include an interactive monitor diagram where each edge can be clicked and assigned a route. That's more intuitive than requiring users to understand monitor coordinates.
+
+GNOME recommends GTK4, Libadwaita, and GSettings for extension preference windows. These settings can be shared between prefs.js and the running extension. 
+GNOME JavaScript
+
+10. First development environment
+Start with a minimal setup on your Ubuntu machine.
+Install development tools
+sudo apt update
+
+sudo apt install git make gjs nodejs npm
+
+
+For nested GNOME Shell testing on newer GNOME versions, the official development guide identifies Ubuntu's mutter-dev-bin package. 
+GNOME JavaScript
+
+
+You can install it separately:
+sudo apt install mutter-dev-bin
+
+
+Create the extension skeleton
+Run:
+gnome-extensions create --interactive
+
+
+Use these initial details:
+Field	Value
+Name	Monitor Portals
+Description	Custom cursor navigation for multi-monitor desktops
+UUID	A unique ID such as monitor-portals@yourname.github.io
+Template	Plain
+
+Choose your actual permanent UUID before publishing.
+
+GNOME's extension creation tool generates a skeleton under ~/.local/share/gnome-shell/extensions/. 
+GNOME JavaScript
+
+Development workflow
+The workflow should be:
+1. Implement one small feature.
+2. Run unit tests and linting.
+3. Load the extension in a controlled GNOME environment.
+4. Test the behavior.
+5. Inspect shell logs.
+6. Commit the working change to Git.
+On Wayland, GNOME Shell generally cannot be restarted in place using the old X11 restart shortcut. Prefer a nested development session and log out/in when required to reload production-session changes.
+
+The GNOME development documentation gives this command for a nested session on current GNOME versions:
+dbus-run-session gnome-shell --devkit --wayland
+
+
+Use the nested environment for early experiments, especially before implementing cursor movement in your everyday desktop. 
+GNOME JavaScript
+
+
+11. Project backlog and version priorities
+Not every possible feature should be included in the first release.
+Version	Features	Release gate
+v0.1	Detect monitors, rescue blocked edges, bidirectional transfer	Your ultrawide/laptop use case works
+v0.2	Surround mode and configurable routes	Multiple route types behave safely
+v0.3	GUI, settings persistence, presets	Usable without editing code
+v0.4	Better scaling, hotplugging, conflict resolution, stability	Full test matrix passes
+v1.0	Documentation, packaging, release	Fresh-install acceptance tests pass
+v2.0	Advanced full-edge interception, multiple-monitor visual editor, optional profiles	Requires additional research and compatibility testing
+
+I would not build Windows, macOS, or KDE support initially. Those systems use different pointer-management APIs, so they should be treated as separate platform backends in a later project phase.
+
+If you reuse Cursor Wrap's source rather than merely studying its ideas, account for its GPL-3.0-or-later license and the resulting obligations for your distribution. 
+GitHub
+
+12. Definition of success
+For your original use case, the first meaningful success looks like this:
+MVP acceptance checklist
+v0.1
+
+[ ] Moving downward from the far-left side of Monitor 2 enters Monitor 1
+[ ] Moving downward from the far-right side of Monitor 2 enters Monitor 1
+[ ] Moving through the normal shared edge still works
+[ ] Moving back to Monitor 2 works predictably
+[ ] Dragging windows or selecting text does not trigger a portal
+[ ] The feature can be disabled without changing display configuration
+
+
+0/6
+
+
+13. Main technical references
+These are the references worth keeping with your project.
+- GNOME Shell extension development — project skeleton, lifecycle, and testing.
+- GNOME extension preferences — GTK4, Libadwaita, and GSettings.
+- GNOME Shell 50 compatibility — version-specific development changes.
+- Cursor Wrap source repository — working reference for cursor tracking, pointer warping, and integration tests.
+- Mutter pointer barriers API — barrier behavior and related functionality.
+
+Recommended immediate milestone
+Checkpoint 1 — Monitor Geometry Inspector
+
+Build a minimal GNOME extension that detects your connected monitors and reports their logical coordinates, widths, heights, and shared or blocked edge intervals.
+
+Expected output for your setup, using illustrative values:
+Monitor 2: External Ultrawide
+Position: (0, 0)
+Size: 3440 × 1440
+
+Monitor 1: Built-in Laptop
+Position: (760, 1440)
+Size: 1920 × 1080
+
+Shared boundary:
+  x = 760 to 2680
+
+Blocked boundary segments:
+  x = 0 to 760
+  x = 2680 to 3440
+
+
+This milestone is intentionally read-only. It lets you verify that your understanding of the monitor layout is correct before introducing any cursor relocation logic.
