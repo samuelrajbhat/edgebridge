@@ -83,8 +83,32 @@ test('destination edge does not rearm or cause a return loop', () => {
     equal(engine.process(sample(315, 720, 200)), null);
     equal(engine.armed, false);
     equal(engine.process(sample(315, 723, 300)), null);
+    equal(engine.armed, false);
+    equal(engine.process(sample(315, 760, 400)), null);
     equal(engine.armed, true);
-    equal(engine.process(sample(315, 720, 310)), null);
+    equal(engine.process(sample(315, 719, 410)), null);
+});
+
+test('left monitor with negative coordinates triggers and remains disarmed at its inset landing', () => {
+    const leftLayout = analyzeLayout([
+        {id: 'right', x: 0, y: 0, width: 1280, height: 720},
+        {id: 'left', x: -800, y: 200, width: 800, height: 300},
+    ]);
+    const leftRoute = {
+        source: {monitor: 'right', edge: 'left'},
+        destination: {monitor: 'left', edge: 'right'},
+    };
+    const engine = new NavigationEngine(leftLayout, leftRoute);
+    engine.process(sample(30, 100));
+    const result = engine.process(sample(0, 100, 20));
+    assert(result);
+    deepEqual(result.destination, {x: -4, y: 242});
+
+    equal(engine.process(sample(-4, 242, 200)), null);
+    equal(engine.armed, false);
+    equal(engine.process(sample(-100, 350, 300)), null);
+    equal(engine.armed, true);
+    equal(engine.process(sample(-797, 350, 310)), null);
 });
 
 test('reset discards stale direction samples', () => {

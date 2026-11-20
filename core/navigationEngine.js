@@ -70,7 +70,7 @@ export class NavigationEngine {
                 [binding.destinationEntry, binding.destinationBounds, binding.route.destination.edge],
             ]) {
                 if (containsPoint(entry.monitor, point.x, point.y) &&
-                    distanceFromEdge(bounds, edge, point) < 2)
+                    distanceFromEdge(bounds, edge, point) <= this.options.landingInset)
                     return true;
             }
         }
